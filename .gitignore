@@ -1,0 +1,20 @@
+# Build outputs
+build/
+bin/
+lib/
+*.o
+*.a
+*.so
+*.out
+
+# Package Managers
+vcpkg_installed/
+.cache/
+
+# Editor & Tooling
+.vscode/
+.idea/
+.clangd/
+compile_commands.json
+*.swp
+*~
