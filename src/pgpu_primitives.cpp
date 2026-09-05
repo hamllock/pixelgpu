@@ -2,6 +2,31 @@
 
 #include <cmath>
 
+namespace {
+constexpr int OUTCODE_INSIDE = 0;
+constexpr int OUTCODE_LEFT = 1;   // x < 0
+constexpr int OUTCODE_RIGHT = 2;  // x > width - 1
+constexpr int OUTCODE_TOP = 4;    // y < 0
+constexpr int OUTCODE_BOTTOM = 8; // y > height - 1
+
+static int compute_outcode(int x, int y, int width, int height) noexcept {
+  int code = OUTCODE_INSIDE;
+  if (x < 0) {
+    code |= OUTCODE_LEFT;
+  } else if (x >= width) {
+    code |= OUTCODE_RIGHT;
+  }
+
+  if (y < 0) {
+    code |= OUTCODE_TOP;
+  } else if (y >= height) {
+    code |= OUTCODE_BOTTOM;
+  }
+
+  return code;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // helpers
 static void plotBlended(uint32_t *fb, pgpu_resolution_t res, int col, int row,
@@ -37,6 +62,64 @@ static void plotBlended(uint32_t *fb, pgpu_resolution_t res, int col, int row,
 static inline float fpart(float x) noexcept { return x - std::floor(x); }
 
 static inline float rfpart(float x) noexcept { return 1.0f - fpart(x); }
+
+static bool clipLine(int &x1, int &y1, int &x2, int &y2, int width,
+                     int height) noexcept {
+  int y_max = height - 1;
+  int x_max = width - 1;
+
+  int code1 = compute_outcode(x1, y1, width, height);
+  int code2 = compute_outcode(x2, y2, width, height);
+
+  while (true) {
+    if ((code1 & code2) == 0)
+      return true; // both points are inside
+    if ((code1 & code2) != 0)
+      return false; // both points are outside
+
+    // Pick outside endpoint
+    int code_out = (code1 != 0) ? code1 : code2;
+    int x = 0;
+    int y = 0;
+
+    if (code_out & OUTCODE_TOP) {
+      // Line clips against top edge (y = 0)
+      x = x1 +
+          static_cast<int>(std::round(static_cast<float>(x2 - x1) * (0 - y1) /
+                                      static_cast<float>(y2 - y1)));
+      y = 0;
+    } else if (code_out & OUTCODE_BOTTOM) {
+      // Line clips against bottom edge (y = y_max)
+      x = x1 + static_cast<int>(
+                   std::round(static_cast<float>(x2 - x1) * (y_max - y1) /
+                              static_cast<float>(y2 - y1)));
+      y = y_max;
+    } else if (code_out & OUTCODE_RIGHT) {
+      // Line clips against right edge (x = x_max)
+      y = y1 + static_cast<int>(
+                   std::round(static_cast<float>(y2 - y1) * (x_max - x1) /
+                              static_cast<float>(x2 - x1)));
+      x = x_max;
+    } else if (code_out & OUTCODE_LEFT) {
+      // Line clips against left edge (x = 0)
+      y = y1 +
+          static_cast<int>(std::round(static_cast<float>(y2 - y1) * (0 - x1) /
+                                      static_cast<float>(x2 - x1)));
+      x = 0;
+    }
+
+    // Update the chosen endpoint
+    if (code_out == code1) {
+      x1 = x;
+      y1 = y;
+      code1 = compute_outcode(x1, y1, width, height);
+    } else {
+      x2 = x;
+      y2 = y;
+      code2 = compute_outcode(x2, y2, width, height);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Circles
@@ -192,12 +275,27 @@ static void lineW(uint32_t *fb, uint32_t stride_px, int x1, int x2, int y1,
   }
 }
 
-void drawLine(uint32_t *fb, uint32_t stride_px, int x1, int y1, int x2, int y2,
-              uint32_t color, uint16_t pattern) noexcept {
+void drawLine(uint32_t *fb, pgpu_resolution_t res, int x1, int y1, int x2,
+              int y2, uint32_t color, uint16_t pattern,
+              uint32_t thickness) noexcept {
+  int half = thickness / 2;
+
   if (abs(x2 - x1) > abs(y2 - y1)) {
-    lineH(fb, stride_px, x1, x2, y1, y2, color, pattern);
+    for (int offset = -half; offset <= half; ++offset) {
+      int cx1 = x1, cy1 = y1 + offset;
+      int cx2 = x2, cy2 = y2 + offset;
+      if (clipLine(cx1, cy1, cx2, cy2, static_cast<int>(res.width),
+                   static_cast<int>(res.height)))
+        lineH(fb, res.width, cx1, cx2, cy1, cy2, color, pattern);
+    }
   } else {
-    lineW(fb, stride_px, x1, x2, y1, y2, color, pattern);
+    for (int offset = -half; offset <= half; ++offset) {
+      int cx1 = x1 + offset, cy1 = y1;
+      int cx2 = x2 + offset, cy2 = y2;
+      if (clipLine(cx1, cy1, cx2, cy2, static_cast<int>(res.width),
+                   static_cast<int>(res.height)))
+        lineW(fb, res.width, cx1, cx2, cy1, cy2, color, pattern);
+    }
   }
 }
 
