@@ -302,6 +302,10 @@ void drawLine(uint32_t *fb, pgpu_resolution_t res, int x1, int y1, int x2,
 void drawLineAA(uint32_t *fb, pgpu_resolution_t res, int col1, int row1,
                 int col2, int row2, uint32_t color) noexcept {
 
+  if (!clipLine(col1, row1, col2, row2, static_cast<int>(res.width),
+                static_cast<int>(res.height)))
+    return;
+
   // steep check
   bool steep = std::abs(row2 - row1) > std::abs(col2 - col1);
   if (steep) {
